@@ -1,36 +1,41 @@
 extern crate core;
 
-mod chained;
-mod unchained;
-mod http;
-mod chain_info;
 mod bls;
+mod chain_info;
+mod chained;
+mod http;
+mod unchained;
 
+use crate::chain_info::ChainInfo;
+use crate::chained::{ChainedBeacon, ChainedScheme};
+use crate::http::HttpTransport;
+use crate::unchained::{UnchainedBeacon, UnchainedScheme};
+use crate::DrandClientError::{InvalidChainInfo, InvalidRound};
 use reqwest::blocking::Client;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
-use crate::chain_info::ChainInfo;
-use crate::chained::{ChainedBeacon, ChainedScheme};
-use crate::DrandClientError::{InvalidChainInfo, InvalidRound};
-use crate::http::HttpTransport;
-use crate::unchained::{UnchainedBeacon, UnchainedScheme};
 
-struct DrandClient<'a, B> {
+pub struct DrandClient<'a, B> {
     scheme: &'a dyn Scheme<B>,
     transport: HttpTransport,
     base_url: &'a str,
     chain_info: ChainInfo,
 }
 
-fn new_chained_client(base_url: &str) -> Result<DrandClient<ChainedBeacon>, DrandClientError> {
+pub fn new_chained_client(base_url: &str) -> Result<DrandClient<ChainedBeacon>, DrandClientError> {
     return new_client(&ChainedScheme {}, base_url);
 }
 
-fn new_unchained_client(base_url: &str) -> Result<DrandClient<UnchainedBeacon>, DrandClientError> {
+pub fn new_unchained_client(
+    base_url: &str,
+) -> Result<DrandClient<UnchainedBeacon>, DrandClientError> {
     return new_client(&UnchainedScheme {}, base_url);
 }
 
-fn new_client<'a, S: Scheme<B>, B>(scheme: &'a S, base_url: &'a str) -> Result<DrandClient<'a, B>, DrandClientError> {
+pub fn new_client<'a, S: Scheme<B>, B>(
+    scheme: &'a S,
+    base_url: &'a str,
+) -> Result<DrandClient<'a, B>, DrandClientError> {
     let http_transport = HttpTransport {
         client: Client::new(),
     };
@@ -41,11 +46,12 @@ fn new_client<'a, S: Scheme<B>, B>(scheme: &'a S, base_url: &'a str) -> Result<D
         scheme,
         base_url,
     };
-    return Ok(client);
+
+    Ok(client)
 }
 
 #[derive(Error, Debug, PartialEq)]
-enum DrandClientError {
+pub enum DrandClientError {
     #[error("invalid round")]
     InvalidRound,
     #[error("invalid beacon")]
@@ -56,42 +62,45 @@ enum DrandClientError {
     NotResponding,
 }
 
-fn fetch_chain_info(transport: &HttpTransport, base_url: &str) -> Result<ChainInfo, DrandClientError> {
+pub fn fetch_chain_info(
+    transport: &HttpTransport,
+    base_url: &str,
+) -> Result<ChainInfo, DrandClientError> {
     let url = format!("{}/info", base_url);
-    return match transport.fetch(&url) {
+    match transport.fetch(&url) {
         Err(_) => Err(DrandClientError::NotResponding),
-        Ok(body) => serde_json::from_str(&body)
-            .map_err(|_| InvalidChainInfo)
-    };
+        Ok(body) => serde_json::from_str(&body).map_err(|_| InvalidChainInfo),
+    }
 }
 
-impl<'a, B> DrandClient<'a, B> where B: DeserializeOwned {
-    fn latest_randomness(&self) -> Result<B, DrandClientError> {
-        return self.fetch_beacon_tag("latest");
+impl<'a, B> DrandClient<'a, B>
+where
+    B: DeserializeOwned,
+{
+    pub fn latest_randomness(&self) -> Result<B, DrandClientError> {
+        self.fetch_beacon_tag("latest")
     }
 
-    fn randomness(&self, round_number: u64) -> Result<B, DrandClientError> {
+    pub fn randomness(&self, round_number: u64) -> Result<B, DrandClientError> {
         if round_number == 0 {
             return Err(InvalidRound);
         }
-        return self.fetch_beacon_tag(&format!("{}", round_number));
+        self.fetch_beacon_tag(&format!("{}", round_number))
     }
 
     fn fetch_beacon_tag(&self, tag: &str) -> Result<B, DrandClientError> {
         let url = format!("{}/public/{}", self.base_url, tag);
-        return match self.transport.fetch(&url) {
-            Err(_) =>
-                Err(DrandClientError::NotResponding),
+        match self.transport.fetch(&url) {
+            Err(_) => Err(DrandClientError::NotResponding),
 
             Ok(body) => match serde_json::from_str(&body) {
-                Ok(json) => self.scheme.verify(&self.chain_info, json)
+                Ok(json) => self
+                    .scheme
+                    .verify(&self.chain_info, json)
                     .map_err(|_| DrandClientError::InvalidBeacon),
-                Err(e) => {
-                    println!("{:?}", e);
-                    Err(DrandClientError::InvalidBeacon)
-                }
-            }
-        };
+                Err(_) => Err(DrandClientError::InvalidBeacon),
+            },
+        }
     }
 }
 
@@ -105,15 +114,15 @@ pub enum SchemeError {
     InvalidChainInfo,
 }
 
-trait Scheme<B> {
+pub trait Scheme<B> {
     fn supports(&self, scheme_id: &str) -> bool;
     fn verify(&self, info: &ChainInfo, beacon: B) -> Result<B, SchemeError>;
 }
 
 #[cfg(test)]
 mod test {
-    use crate::{DrandClientError, new_chained_client, new_unchained_client};
     use crate::DrandClientError::InvalidRound;
+    use crate::{new_chained_client, new_unchained_client, DrandClientError};
 
     #[test]
     fn request_chained_randomness_success() -> Result<(), DrandClientError> {

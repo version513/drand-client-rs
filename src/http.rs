@@ -15,19 +15,19 @@ pub struct HttpTransport {
 }
 
 impl HttpTransport {
-    pub fn fetch<'a>(&self, url: &str) -> Result<String, HttpError> {
-        let res = self.client.get(url)
+    pub fn fetch(&self, url: &str) -> Result<String, HttpError> {
+        let res = self
+            .client
+            .get(url)
             .send()
             .map_err(|_| HttpError::Unexpected)?;
 
-        return match res.status() {
-            StatusCode::OK => res.text()
-                .map_err(|_| HttpError::Unexpected),
+        match res.status() {
+            StatusCode::OK => res.text().map_err(|_| HttpError::Unexpected),
 
-            StatusCode::NOT_FOUND =>
-                Err(HttpError::NotFound),
+            StatusCode::NOT_FOUND => Err(HttpError::NotFound),
 
             _ => Err(HttpError::Unexpected),
-        };
+        }
     }
 }

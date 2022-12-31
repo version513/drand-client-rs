@@ -13,5 +13,5 @@ A simple drand client implementation written in rust
 - [ ] nicer error messages
 - [ ] comprehensive testing
 - [ ] rustdoc
-- [ ] github actions for testing
+- [x] github actions for testing
 - [ ] examples

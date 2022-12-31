@@ -1,6 +1,6 @@
-use bls_signatures::{hash, PublicKey, Serialize, Signature, verify};
 use crate::chain_info::ChainInfo;
 use crate::SchemeError;
+use bls_signatures::{hash, verify, PublicKey, Serialize, Signature};
 
 pub trait BlsVerifiable {
     fn signature(&self) -> &Vec<u8>;
@@ -11,20 +11,18 @@ pub(crate) fn bls_verify<B: BlsVerifiable>(info: &ChainInfo, beacon: B) -> Resul
     let public_key = PublicKey::from_bytes(info.public_key.as_slice())
         .map_err(|_| SchemeError::InvalidChainInfo)?;
 
-    let signature = Signature::from_bytes(&beacon.signature().as_slice())
+    let signature = Signature::from_bytes(beacon.signature().as_slice())
         .map_err(|_| SchemeError::InvalidBeacon)?;
 
-    let bls_message_bytes = beacon.to_message()
+    let bls_message_bytes = beacon
+        .to_message()
         .map(|bytes| sha256::digest(bytes.as_slice()))
-        .and_then(|hex_str| hex::decode(hex_str)
-            .map_err(|_| SchemeError::InvalidBeacon)
-        )?;
-
+        .and_then(|hex_str| hex::decode(hex_str).map_err(|_| SchemeError::InvalidBeacon))?;
 
     let point_on_curve = hash(bls_message_bytes.as_slice());
     if !verify(&signature, &[point_on_curve], &[public_key]) {
-        return Err(SchemeError::InvalidBeacon);
+        Err(SchemeError::InvalidBeacon)
+    } else {
+        Ok(beacon)
     }
-
-    return Ok(beacon);
 }

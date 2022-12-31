@@ -1,8 +1,8 @@
-use std::io::{Write};
-use crate::{bls, Scheme, SchemeError};
-use crate::chain_info::ChainInfo;
-use serde::Deserialize;
 use crate::bls::BlsVerifiable;
+use crate::chain_info::ChainInfo;
+use crate::{bls, Scheme, SchemeError};
+use serde::Deserialize;
+use std::io::Write;
 
 #[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct ChainedBeacon {
@@ -20,15 +20,19 @@ pub struct ChainedScheme {}
 
 impl Scheme<ChainedBeacon> for ChainedScheme {
     fn supports(&self, scheme_id: &str) -> bool {
-        return scheme_id.eq_ignore_ascii_case("pedersen-bls-chained");
+        scheme_id.eq_ignore_ascii_case("pedersen-bls-chained")
     }
 
-    fn verify(&self, info: &ChainInfo, beacon: ChainedBeacon) -> Result<ChainedBeacon, SchemeError> {
+    fn verify(
+        &self,
+        info: &ChainInfo,
+        beacon: ChainedBeacon,
+    ) -> Result<ChainedBeacon, SchemeError> {
         if !self.supports(&info.scheme_id) {
-            return Err(SchemeError::InvalidScheme);
+            Err(SchemeError::InvalidScheme)
+        } else {
+            bls::bls_verify(info, beacon)
         }
-
-        return bls::bls_verify(info, beacon);
     }
 }
 
@@ -44,9 +48,9 @@ impl BlsVerifiable for ChainedBeacon {
             return Err(SchemeError::InvalidBeacon);
         }
         if bytes.write_all(&self.round_number.to_be_bytes()).is_err() {
-            return Err(SchemeError::InvalidBeacon);
-        };
-
-        return Ok(bytes);
+            Err(SchemeError::InvalidBeacon)
+        } else {
+            Ok(bytes)
+        }
     }
 }
