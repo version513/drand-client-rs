@@ -1,97 +1,79 @@
+extern crate core;
+
 mod chained;
+mod unchained;
+mod http;
+mod chain_info;
+mod bls;
 
-use json::JsonValue;
-use reqwest::{StatusCode};
 use reqwest::blocking::Client;
+use serde::de::DeserializeOwned;
 use thiserror::Error;
+use crate::chain_info::ChainInfo;
 use crate::chained::{ChainedBeacon, ChainedScheme};
-
-
-#[derive(Error, Debug)]
-enum HttpError {
-    #[error("not found")]
-    NotFound,
-    #[error("unexpected")]
-    Unexpected,
-}
-
-struct HttpTransport {
-    client: Client,
-}
-
-impl HttpTransport {
-    fn fetch(&self, url: &str) -> Result<String, HttpError> {
-        let res = self.client.get(url)
-            .send()
-            .map_err(|_| HttpError::Unexpected)?;
-
-        return match res.status() {
-            StatusCode::OK => res.text()
-                .map_err(|_| HttpError::Unexpected),
-
-            StatusCode::NOT_FOUND =>
-                Err(HttpError::NotFound),
-
-            _ => Err(HttpError::Unexpected),
-        };
-    }
-}
-
-#[derive(Error, Debug)]
-enum ParseError<E> {
-    #[error("malformed input")]
-    MalformedInput,
-    #[error("did not parse")]
-    DidNotParse(#[from] E),
-}
-
-struct JsonParser {}
-
-impl JsonParser {
-    fn parse<B: TryFrom<JsonValue>>(&self, input: &str) -> Result<B, ParseError<B::Error>> {
-        return json::parse(input)
-            .map_err(|_| ParseError::MalformedInput)
-            .map(|json|
-                B::try_from(json)
-                    .map_err(|e| ParseError::DidNotParse(e))
-            )?;
-    }
-}
+use crate::DrandClientError::{InvalidChainInfo, InvalidRound};
+use crate::http::HttpTransport;
+use crate::unchained::{UnchainedBeacon, UnchainedScheme};
 
 struct DrandClient<'a, B> {
     scheme: &'a dyn Scheme<B>,
     transport: HttpTransport,
-    parser: JsonParser,
     base_url: &'a str,
+    chain_info: ChainInfo,
 }
 
-fn new_chained_client(base_url: &str) -> DrandClient<ChainedBeacon> {
-    return DrandClient {
-        scheme: &ChainedScheme {},
-        transport: HttpTransport {
-            client: reqwest::blocking::Client::new(),
-        },
-        parser: JsonParser {},
+fn new_chained_client(base_url: &str) -> Result<DrandClient<ChainedBeacon>, DrandClientError> {
+    return new_client(&ChainedScheme {}, base_url);
+}
+
+fn new_unchained_client(base_url: &str) -> Result<DrandClient<UnchainedBeacon>, DrandClientError> {
+    return new_client(&UnchainedScheme {}, base_url);
+}
+
+fn new_client<'a, S: Scheme<B>, B>(scheme: &'a S, base_url: &'a str) -> Result<DrandClient<'a, B>, DrandClientError> {
+    let http_transport = HttpTransport {
+        client: Client::new(),
+    };
+    let chain_info = fetch_chain_info(&http_transport, base_url)?;
+    let client = DrandClient {
+        transport: http_transport,
+        chain_info,
+        scheme,
         base_url,
     };
+    return Ok(client);
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, PartialEq)]
 enum DrandClientError {
     #[error("invalid round")]
     InvalidRound,
     #[error("invalid beacon")]
     InvalidBeacon,
+    #[error("invalid chain info")]
+    InvalidChainInfo,
     #[error("not responding")]
     NotResponding,
 }
 
-impl<'a, B> DrandClient<'a, B> where B: TryFrom<JsonValue> {
+fn fetch_chain_info(transport: &HttpTransport, base_url: &str) -> Result<ChainInfo, DrandClientError> {
+    let url = format!("{}/info", base_url);
+    return match transport.fetch(&url) {
+        Err(_) => Err(DrandClientError::NotResponding),
+        Ok(body) => serde_json::from_str(&body)
+            .map_err(|_| InvalidChainInfo)
+    };
+}
+
+impl<'a, B> DrandClient<'a, B> where B: DeserializeOwned {
     fn latest_randomness(&self) -> Result<B, DrandClientError> {
         return self.fetch_beacon_tag("latest");
     }
 
     fn randomness(&self, round_number: u64) -> Result<B, DrandClientError> {
+        if round_number == 0 {
+            return Err(InvalidRound);
+        }
         return self.fetch_beacon_tag(&format!("{}", round_number));
     }
 
@@ -101,37 +83,26 @@ impl<'a, B> DrandClient<'a, B> where B: TryFrom<JsonValue> {
             Err(_) =>
                 Err(DrandClientError::NotResponding),
 
-            Ok(beacon_str) => {
-                self.parser.parse::<B>(&beacon_str)
-                    .map_err(|_| DrandClientError::InvalidBeacon)
+            Ok(body) => match serde_json::from_str(&body) {
+                Ok(json) => self.scheme.verify(&self.chain_info, json)
+                    .map_err(|_| DrandClientError::InvalidBeacon),
+                Err(e) => {
+                    println!("{:?}", e);
+                    Err(DrandClientError::InvalidBeacon)
+                }
             }
         };
     }
 }
 
 #[derive(Error, Debug)]
-enum SchemeError {
+pub enum SchemeError {
     #[error("invalid beacon")]
     InvalidBeacon,
     #[error("invalid scheme")]
     InvalidScheme,
     #[error("invalid chain info")]
     InvalidChainInfo,
-}
-
-struct ChainInfo {
-    scheme_id: String,
-    public_key: Vec<u8>,
-    chain_hash: Vec<u8>,
-    hash: Vec<u8>,
-    group_hash: Vec<u8>,
-    genesis_time: u64,
-    period_seconds: usize,
-    metadata: ChainInfoMetadata,
-}
-
-struct ChainInfoMetadata {
-    beacon_id: String,
 }
 
 trait Scheme<B> {
@@ -141,13 +112,52 @@ trait Scheme<B> {
 
 #[cfg(test)]
 mod test {
-    use crate::{DrandClientError, new_chained_client};
+    use crate::{DrandClientError, new_chained_client, new_unchained_client};
+    use crate::DrandClientError::InvalidRound;
 
     #[test]
-    fn request_some_randomness() -> Result<(), DrandClientError> {
-        let client = new_chained_client("https://api.drand.sh");
+    fn request_chained_randomness_success() -> Result<(), DrandClientError> {
+        let chained_url = "https://api.drand.sh";
+        let client = new_chained_client(chained_url)?;
         let randomness = client.latest_randomness()?;
         assert!(randomness.round_number > 0);
+        return Ok(());
+    }
+
+    #[test]
+    fn request_unchained_randomness_success() -> Result<(), DrandClientError> {
+        let unchained_url = "https://pl-eu.testnet.drand.sh/7672797f548f3f4748ac4bf3352fc6c6b6468c9ad40ad456a397545c6e2df5bf";
+        let client = new_unchained_client(unchained_url)?;
+        let randomness = client.latest_randomness()?;
+        assert!(randomness.round_number > 0);
+        return Ok(());
+    }
+
+    #[test]
+    fn request_unchained_randomness_wrong_client_error() -> Result<(), DrandClientError> {
+        let unchained_url = "https://pl-eu.testnet.drand.sh/7672797f548f3f4748ac4bf3352fc6c6b6468c9ad40ad456a397545c6e2df5bf";
+        let client = new_chained_client(unchained_url)?;
+        let result = client.latest_randomness();
+        assert!(result.is_err());
+        return Ok(());
+    }
+
+    #[test]
+    fn request_chained_randomness_wrong_client_error() -> Result<(), DrandClientError> {
+        let chained_url = "https://api.drand.sh";
+        let client = new_unchained_client(chained_url)?;
+        let result = client.latest_randomness();
+        assert!(result.is_err());
+        return Ok(());
+    }
+
+    #[test]
+    fn request_genesis_returns_error() -> Result<(), DrandClientError> {
+        let chained_url = "https://api.drand.sh";
+        let client = new_chained_client(chained_url);
+        let result = client?.randomness(0);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), InvalidRound);
         return Ok(());
     }
 }
