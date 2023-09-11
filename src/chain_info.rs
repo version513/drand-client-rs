@@ -1,9 +1,10 @@
+use crate::verify::SchemeID;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct ChainInfo {
     #[serde(alias = "schemeID")]
-    pub scheme_id: String,
+    pub scheme_id: SchemeID,
     #[serde(with = "hex")]
     pub public_key: Vec<u8>,
     #[serde(with = "hex", alias = "hash")]
