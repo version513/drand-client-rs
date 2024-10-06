@@ -4,13 +4,10 @@
 //! manually without the client
 //!
 
-use bls12_381::hash_to_curve::{ExpandMsgXmd, HashToCurve};
-use bls12_381::{
-    multi_miller_loop, G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective, Gt,
-};
+use energon::drand::{BeaconDigest, DefaultScheme, Scheme, SchortSigScheme, UnchainedScheme};
+use energon::traits::{Affine, Group};
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
-use std::ops::Neg;
 use thiserror::Error;
 
 #[derive(Deserialize, Debug, PartialEq, Clone)]
@@ -24,9 +21,6 @@ pub struct Beacon {
     #[serde(default, with = "hex")]
     pub previous_signature: Vec<u8>,
 }
-
-const DST_G1: &str = "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
-const DST_G2: &str = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum SchemeID {
@@ -83,155 +77,37 @@ pub fn verify_beacon(
         return Err(VerificationError::InvalidRandomness);
     }
     match scheme_id {
-        SchemeID::PedersenBlsChained => verify_on_g2(
-            public_key,
-            &chained_beacon_message(beacon)?,
-            &beacon.signature,
-            DST_G2,
-        ),
-        SchemeID::PedersenBlsUnchained => verify_on_g2(
-            public_key,
-            &unchained_beacon_message(beacon)?,
-            &beacon.signature,
-            DST_G2,
-        ),
-        SchemeID::UnchainedOnG1RFC9380 => verify_on_g1(
-            public_key,
-            &unchained_beacon_message(beacon)?,
-            &beacon.signature,
-            DST_G1,
-        ),
+        SchemeID::PedersenBlsChained => verify::<DefaultScheme>(public_key, beacon),
+        SchemeID::PedersenBlsUnchained => verify::<UnchainedScheme>(public_key, beacon),
+        SchemeID::UnchainedOnG1RFC9380 => verify::<SchortSigScheme>(public_key, beacon),
     }
 }
 
-fn unchained_beacon_message(beacon: &Beacon) -> Result<Vec<u8>, VerificationError> {
-    let round_bytes = beacon.round_number.to_be_bytes();
-
-    Ok(Sha256::digest(&round_bytes).to_vec())
-}
-
-fn chained_beacon_message(beacon: &Beacon) -> Result<Vec<u8>, VerificationError> {
-    if beacon.previous_signature.is_empty() {
-        Err(VerificationError::ChainedBeaconNeedsPreviousSignature)
-    } else {
-        let message: Vec<u8> = beacon
-            .previous_signature
-            .clone()
-            .into_iter()
-            .chain(beacon.round_number.to_be_bytes())
-            .collect();
-
-        Ok(Sha256::digest(message.as_slice()).to_vec())
-    }
-}
-
-/// verify a signature where the public key is on g1 and the signature is on g2 for a
-/// given domain separation tag
-pub fn verify_on_g2(
-    public_key: &[u8],
-    message: &[u8],
-    signature: &[u8],
-    domain_separation_tag: &str,
-) -> Result<(), VerificationError> {
-    let pub_key_bytes: &[u8; 48] = public_key
-        .try_into()
-        .map_err(|_| VerificationError::InvalidPublicKey)?;
-
-    let sig_bytes: &[u8; 96] = signature
-        .try_into()
-        .map_err(|_| VerificationError::InvalidSignatureLength)?;
-
-    let p = G1Affine::from_compressed(pub_key_bytes).unwrap_or(G1Affine::identity());
-
-    let q = G2Affine::from_compressed(sig_bytes).unwrap_or(G2Affine::identity());
-
-    if p.is_on_curve().unwrap_u8() != 1 {
-        return Err(VerificationError::InvalidPublicKey);
-    }
-
-    if p.is_identity().unwrap_u8() == 1 {
-        return Err(VerificationError::InvalidPublicKey);
-    }
-
-    if message.is_empty() {
-        return Err(VerificationError::EmptyMessage);
-    }
-
-    if signature.is_empty() {
+pub fn verify<S: Scheme>(public_key: &[u8], beacon: &Beacon) -> Result<(), VerificationError> {
+    if beacon.signature.is_empty() {
         return Err(VerificationError::InvalidSignatureLength);
     }
 
-    let m = <G2Projective as HashToCurve<ExpandMsgXmd<Sha256>>>::hash_to_curve(
-        message,
-        domain_separation_tag.as_bytes(),
-    );
-
-    let m_prepared = G2Prepared::from(G2Affine::from(m));
-    let q_prepared = G2Prepared::from(q);
-    let exp = multi_miller_loop(&[
-        (&p.neg(), &m_prepared),
-        (&G1Affine::generator(), &q_prepared),
-    ]);
-
-    if exp.final_exponentiation() != Gt::identity() {
-        Err(VerificationError::SignatureFailedVerification)
-    } else {
-        Ok(())
+    if S::Beacon::is_chained() && beacon.previous_signature.is_empty() {
+        return Err(VerificationError::ChainedBeaconNeedsPreviousSignature);
     }
-}
 
-/// verify a signature where the public key is on g2 and the signature is on g1 for a
-/// given domain separation tag
-pub fn verify_on_g1(
-    public_key: &[u8],
-    message: &[u8],
-    signature: &[u8],
-    domain_separation_tag: &str,
-) -> Result<(), VerificationError> {
-    let pub_key_bytes: &[u8; 96] = public_key
-        .try_into()
+    let signature_point = Affine::deserialize(&beacon.signature)
+        .map_err(|_| VerificationError::SignatureFailedVerification)?;
+    let pubkey_point = <S::Key as Group>::Affine::deserialize(public_key)
         .map_err(|_| VerificationError::InvalidPublicKey)?;
 
-    let sig_bytes: &[u8; 48] = signature
-        .try_into()
-        .map_err(|_| VerificationError::InvalidSignatureLength)?;
-
-    let signature_point = G1Affine::from_compressed(sig_bytes).unwrap_or(G1Affine::identity());
-    let pubkey_point = G2Affine::from_compressed(pub_key_bytes).unwrap_or(G2Affine::identity());
-
-    if pubkey_point.is_on_curve().unwrap_u8() != 1 {
+    if !pubkey_point.is_on_curve() || pubkey_point.is_identity() {
         return Err(VerificationError::InvalidPublicKey);
     }
 
-    if pubkey_point.is_identity().unwrap_u8() == 1 {
-        return Err(VerificationError::InvalidPublicKey);
+    let message = S::Beacon::digest(&beacon.previous_signature, beacon.round_number);
+
+    if S::bls_verify(&pubkey_point, &signature_point, &message).is_err() {
+        return Err(VerificationError::SignatureFailedVerification);
     }
 
-    if message.is_empty() {
-        return Err(VerificationError::EmptyMessage);
-    }
-
-    if signature.is_empty() {
-        return Err(VerificationError::InvalidSignatureLength);
-    }
-
-    let m = <G1Projective as HashToCurve<ExpandMsgXmd<Sha256>>>::hash_to_curve(
-        message,
-        domain_separation_tag.as_bytes(),
-    );
-
-    let pubkey_prepared = G2Prepared::from(pubkey_point.neg());
-    let g2_base = G2Prepared::from(G2Affine::generator());
-    let exp = multi_miller_loop(&[
-        (&G1Affine::from(m), &pubkey_prepared),
-        (&signature_point, &g2_base),
-    ]);
-
-    if exp.final_exponentiation() != Gt::identity() {
-        Err(VerificationError::SignatureFailedVerification)
-    } else {
-        Ok(())
-    }
+    Ok(())
 }
 
 #[cfg(test)]

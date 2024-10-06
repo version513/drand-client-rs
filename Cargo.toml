@@ -13,3 +13,7 @@ serde = { version = "1.0.187", features = ["derive"] }
 serde_json = "1.0.105"
 sha2 = "0.9" # this can't be upgraded for compat with bls12_381 it seems :<
 thiserror = "1.0.38"
+
+energon = { git = "ssh://git@github.com/version513/energon.git", features = [
+    "bls12381_blstrs",
+], default-features = false }
