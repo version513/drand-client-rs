@@ -6,7 +6,6 @@ A simple drand client implementation written in rust
 - HTTP transport
 - `pedersen-bls-chained` scheme
 - `pedersen-bls-unchained` scheme
-- `bls-unchained-on-g1` scheme
 - `bls-unchained-on-g1-rfc9380` scheme
 
 ## Example usage
