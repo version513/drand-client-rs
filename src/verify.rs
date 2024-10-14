@@ -4,7 +4,9 @@
 //! manually without the client
 //!
 
-use energon::drand::{BeaconDigest, DefaultScheme, Scheme, SchortSigScheme, UnchainedScheme};
+use energon::schemes::drand::{
+    BeaconDigest, DefaultScheme, DrandScheme as Scheme, SchortSigScheme, UnchainedScheme,
+};
 use energon::traits::{Affine, Group};
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
@@ -110,10 +112,17 @@ pub fn verify<S: Scheme>(public_key: &[u8], beacon: &Beacon) -> Result<(), Verif
     Ok(())
 }
 
+// Tests might be executed with different backends
+// cargo test --package drand-client-rs --features blstrs
+// cargo test --package drand-client-rs --features arkworks
 #[cfg(test)]
 mod test {
     use crate::verify::{verify_beacon, Beacon, SchemeID, VerificationError};
-    use bls12_381::{G1Affine, G2Affine};
+    use energon::points::KeyPoint;
+    use energon::schemes::drand::DefaultScheme;
+    use energon::schemes::drand::SchortSigScheme;
+    use energon::schemes::drand::UnchainedScheme;
+    use energon::traits::Affine;
 
     #[test]
     fn default_beacon_verifies() {
@@ -226,7 +235,8 @@ mod test {
 
     #[test]
     fn default_beacon_infinity_public_key_fails() {
-        let public_key = G1Affine::identity().to_compressed();
+        let public_key: KeyPoint<DefaultScheme> = Affine::identity();
+        let public_key_bytes = public_key.serialize().unwrap();
         let prev_sig = dehexify("a2237ee39a1a6569cb8e02c6e979c07efe1f30be0ac501436bd325015f1cd6129dc56fd60efcdf9158d74ebfa34bfcbd17803dbca6d2ae8bc3a968e4dc582f8710c69de80b2e649663fef5742d22fff7d1619b75d5f222e8c9b8840bc2044bce");
 
         let beacon = Beacon {
@@ -237,7 +247,7 @@ mod test {
         };
 
         assert_error(
-            verify_beacon(&SchemeID::PedersenBlsChained, &public_key, &beacon),
+            verify_beacon(&SchemeID::PedersenBlsChained, &public_key_bytes, &beacon),
             VerificationError::InvalidPublicKey,
         );
     }
@@ -342,7 +352,8 @@ mod test {
 
     #[test]
     fn testnet_unchained_beacon_infinity_public_key_fails() {
-        let public_key = G2Affine::identity().to_uncompressed();
+        let public_key: KeyPoint<UnchainedScheme> = Affine::identity();
+        let public_key_bytes = public_key.serialize().unwrap();
         let beacon = Beacon {
             round_number: 397092,
             randomness: dehexify("7731783ab8118d7484d0e8e237f3023a4c7ef4532f35016f2e56e89a7570c796"),
@@ -351,7 +362,7 @@ mod test {
         };
 
         assert_error(
-            verify_beacon(&SchemeID::PedersenBlsUnchained, &public_key, &beacon),
+            verify_beacon(&SchemeID::PedersenBlsUnchained, &public_key_bytes, &beacon),
             VerificationError::InvalidPublicKey,
         );
     }
@@ -390,7 +401,8 @@ mod test {
 
     #[test]
     fn g1g2_swap_infinity_public_key_fails() {
-        let public_key = G2Affine::identity().to_uncompressed();
+        let public_key: KeyPoint<SchortSigScheme> = Affine::identity();
+        let public_key_bytes = public_key.serialize().unwrap();
         let beacon = Beacon {
             round_number: 1000,
             randomness: dehexify("fe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd"),
@@ -399,7 +411,7 @@ mod test {
         };
 
         assert_error(
-            verify_beacon(&SchemeID::UnchainedOnG1RFC9380, &public_key, &beacon),
+            verify_beacon(&SchemeID::UnchainedOnG1RFC9380, &public_key_bytes, &beacon),
             VerificationError::InvalidPublicKey,
         );
     }
