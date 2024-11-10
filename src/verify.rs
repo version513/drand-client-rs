@@ -3,10 +3,10 @@
 //! this module contains some of the cryptographic internals that some users might wish to use
 //! manually without the client
 //!
-
-use energon::schemes::drand::{
-    BeaconDigest, DefaultScheme, DrandScheme as Scheme, SchortSigScheme, UnchainedScheme,
+use energon::drand::schemes::{
+    BN254UnchainedOnG1Scheme, DefaultScheme, SigsOnG1Scheme, UnchainedScheme,
 };
+use energon::drand::traits::{BeaconDigest, DrandScheme as Scheme};
 use energon::traits::{Affine, Group};
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
@@ -29,6 +29,7 @@ pub enum SchemeID {
     PedersenBlsChained,
     PedersenBlsUnchained,
     UnchainedOnG1RFC9380,
+    Bn254UnchainedOnG1,
 }
 
 impl<'de> Deserialize<'de> for SchemeID {
@@ -41,12 +42,14 @@ impl<'de> Deserialize<'de> for SchemeID {
             "pedersen-bls-chained" => Ok(SchemeID::PedersenBlsChained),
             "pedersen-bls-unchained" => Ok(SchemeID::PedersenBlsUnchained),
             "bls-unchained-g1-rfc9380" => Ok(SchemeID::UnchainedOnG1RFC9380),
+            "bls-bn254-unchained-on-g1" => Ok(SchemeID::Bn254UnchainedOnG1),
             _ => Err(serde::de::Error::unknown_variant(
                 s,
                 &[
                     "pedersen-bls-chained",
                     "pedersen-bls-unchained",
                     "bls-unchained-g1-rfc9380",
+                    "bls-bn254-unchained-on-g1",
                 ],
             )),
         }
@@ -81,7 +84,8 @@ pub fn verify_beacon(
     match scheme_id {
         SchemeID::PedersenBlsChained => verify::<DefaultScheme>(public_key, beacon),
         SchemeID::PedersenBlsUnchained => verify::<UnchainedScheme>(public_key, beacon),
-        SchemeID::UnchainedOnG1RFC9380 => verify::<SchortSigScheme>(public_key, beacon),
+        SchemeID::UnchainedOnG1RFC9380 => verify::<SigsOnG1Scheme>(public_key, beacon),
+        SchemeID::Bn254UnchainedOnG1 => verify::<BN254UnchainedOnG1Scheme>(public_key, beacon),
     }
 }
 
@@ -117,11 +121,8 @@ pub fn verify<S: Scheme>(public_key: &[u8], beacon: &Beacon) -> Result<(), Verif
 // cargo test --package drand-client-rs --features arkworks
 #[cfg(test)]
 mod test {
-    use crate::verify::{verify_beacon, Beacon, SchemeID, VerificationError};
+    use super::*;
     use energon::points::KeyPoint;
-    use energon::schemes::drand::DefaultScheme;
-    use energon::schemes::drand::SchortSigScheme;
-    use energon::schemes::drand::UnchainedScheme;
     use energon::traits::Affine;
 
     #[test]
@@ -401,7 +402,7 @@ mod test {
 
     #[test]
     fn g1g2_swap_infinity_public_key_fails() {
-        let public_key: KeyPoint<SchortSigScheme> = Affine::identity();
+        let public_key: KeyPoint<SigsOnG1Scheme> = Affine::identity();
         let public_key_bytes = public_key.serialize().unwrap();
         let beacon = Beacon {
             round_number: 1000,
@@ -464,6 +465,88 @@ mod test {
         assert_error(
             verify_beacon(&SchemeID::UnchainedOnG1RFC9380, &public_key, &beacon),
             VerificationError::SignatureFailedVerification,
+        );
+    }
+
+    #[test]
+    fn bn254_unchained_on_g1_beacon_verifies() {
+        let public_key = dehexify("07e1d1d335df83fa98462005690372c643340060d205306a9aa8106b6bd0b3820557ec32c2ad488e4d4f6008f89a346f18492092ccc0d594610de2732c8b808f0095685ae3a85ba243747b1b2f426049010f6b73a0cf1d389351d5aaaa1047f6297d3a4f9749b33eb2d904c9d9ebf17224150ddd7abd7567a9bec6c74480ee0b");
+        let beacon = Beacon {
+            round_number: 1000,
+            randomness: dehexify("0e6745667465a6f9dce5d5f994656955080be14c469ff17fc4fc588c925a8504"),
+            signature: dehexify("06fd5996329504d3a56b482d9222bf7205857d0a9559ddd216ca31a286f6a8cc0a120f021aac2f13553fb164f62bc3a5ca32c76dea88a777b39bcf3cac5fdbd6"),
+            previous_signature: Vec::new(),
+        };
+
+        assert!(matches!(
+            verify_beacon(&SchemeID::Bn254UnchainedOnG1, &public_key, &beacon),
+            Ok(_)
+        ));
+    }
+
+    #[test]
+    fn bn254_unchained_on_g1_empty_public_key_fails() {
+        let public_key = Vec::new();
+        let beacon = Beacon {
+            round_number: 1000,
+            randomness: dehexify("0e6745667465a6f9dce5d5f994656955080be14c469ff17fc4fc588c925a8504"),
+            signature: dehexify("06fd5996329504d3a56b482d9222bf7205857d0a9559ddd216ca31a286f6a8cc0a120f021aac2f13553fb164f62bc3a5ca32c76dea88a777b39bcf3cac5fdbd6"),
+            previous_signature: Vec::new(),
+        };
+
+        assert_error(
+            verify_beacon(&SchemeID::Bn254UnchainedOnG1, &public_key, &beacon),
+            VerificationError::InvalidPublicKey,
+        );
+    }
+
+    #[test]
+    fn bn254_unchained_on_g1_infinity_public_key_fails() {
+        let public_key: KeyPoint<BN254UnchainedOnG1Scheme> = Affine::identity();
+        let public_key_bytes = public_key.serialize().unwrap();
+        let beacon = Beacon {
+            round_number: 1000,
+            randomness: dehexify("0e6745667465a6f9dce5d5f994656955080be14c469ff17fc4fc588c925a8504"),
+            signature: dehexify("06fd5996329504d3a56b482d9222bf7205857d0a9559ddd216ca31a286f6a8cc0a120f021aac2f13553fb164f62bc3a5ca32c76dea88a777b39bcf3cac5fdbd6"),
+            previous_signature: Vec::new(),
+        };
+
+        assert_error(
+            verify_beacon(&SchemeID::Bn254UnchainedOnG1, &public_key_bytes, &beacon),
+            VerificationError::InvalidPublicKey,
+        );
+    }
+
+    #[test]
+    fn bn254_unchained_on_g1_wrong_round_fails() {
+        let public_key = dehexify("07e1d1d335df83fa98462005690372c643340060d205306a9aa8106b6bd0b3820557ec32c2ad488e4d4f6008f89a346f18492092ccc0d594610de2732c8b808f0095685ae3a85ba243747b1b2f426049010f6b73a0cf1d389351d5aaaa1047f6297d3a4f9749b33eb2d904c9d9ebf17224150ddd7abd7567a9bec6c74480ee0b");
+        let beacon = Beacon {
+            round_number: 1,
+            randomness: dehexify("0e6745667465a6f9dce5d5f994656955080be14c469ff17fc4fc588c925a8504"),
+            signature: dehexify("06fd5996329504d3a56b482d9222bf7205857d0a9559ddd216ca31a286f6a8cc0a120f021aac2f13553fb164f62bc3a5ca32c76dea88a777b39bcf3cac5fdbd6"),
+            previous_signature: Vec::new(),
+        };
+
+        assert_error(
+            verify_beacon(&SchemeID::Bn254UnchainedOnG1, &public_key, &beacon),
+            VerificationError::SignatureFailedVerification,
+        );
+    }
+
+    #[test]
+    fn bn254_unchained_on_g1_invalid_randomness_fails() {
+        let public_key = dehexify("07e1d1d335df83fa98462005690372c643340060d205306a9aa8106b6bd0b3820557ec32c2ad488e4d4f6008f89a346f18492092ccc0d594610de2732c8b808f0095685ae3a85ba243747b1b2f426049010f6b73a0cf1d389351d5aaaa1047f6297d3a4f9749b33eb2d904c9d9ebf17224150ddd7abd7567a9bec6c74480ee0b");
+        let beacon = Beacon {
+            round_number: 1000,
+            // incorrect hash for the signature
+            randomness: dehexify("1e6745667465a6f9dce5d5f994656955080be14c469ff17fc4fc588c925a8504"),
+            signature: dehexify("06fd5996329504d3a56b482d9222bf7205857d0a9559ddd216ca31a286f6a8cc0a120f021aac2f13553fb164f62bc3a5ca32c76dea88a777b39bcf3cac5fdbd6"),
+            previous_signature: Vec::new(),
+        };
+
+        assert_error(
+            verify_beacon(&SchemeID::Bn254UnchainedOnG1, &public_key, &beacon),
+            VerificationError::InvalidRandomness,
         );
     }
 

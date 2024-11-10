@@ -7,6 +7,7 @@ A simple drand client implementation written in rust
 - `pedersen-bls-chained` scheme
 - `pedersen-bls-unchained` scheme
 - `bls-unchained-on-g1-rfc9380` scheme
+- `bls-bn254-unchained-on-g1` scheme
 
 ## Example usage
 

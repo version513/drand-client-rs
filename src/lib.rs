@@ -203,6 +203,15 @@ mod test {
     }
 
     #[test]
+    fn request_bn254_unchained_on_g1_latest_succeeds() -> Result<(), DrandClientError> {
+        let unchained_url =
+            "https://api.drand.sh/04f1e9062b8a81f848fded9c12306733282b2727ecced50032187751166ec8c3";
+        let client = new_http_client(unchained_url)?;
+        client.latest_randomness()?;
+        Ok(())
+    }
+
+    #[test]
     fn request_mismatching_round_fails() -> Result<(), DrandClientError> {
         let info = ChainInfo {
             scheme_id: PedersenBlsChained,
